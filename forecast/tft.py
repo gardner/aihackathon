@@ -16,21 +16,48 @@
 # from lightning.pytorch.tuner import Tuner
 # from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
 import pandas as pd
-from datetime import timezone
+from datetime import datetime, timezone
 
-df = pd.read_csv('data/ReconciledInjectionAndOfftake_201501_20160320_043837.csv')
+import pytz
+
+df = pd.read_csv('data/ReconciledInjectionAndOfftake_201604_20170624_100756.csv')
 
 # Ignore DST for now
 # dt = datetime.strptime('2015-01-03', '%Y/%m/%d')
 # print(dt)
 
+pytz_nz = pytz.timezone('Pacific/Auckland')
 
+
+# df = df.where(df["TradingDate"] == '2016-04-03').sort_values("TradingPeriod").dropna()
 # 2023‐08‐08T19:05:07−07:00
-df["TradingDate"] = pd.to_datetime(df["TradingDate"] + 'T00:00:00').tz_localize(tz='Pacific/Auckland')
-df["TradingDate"] = df["TradingDate"].dt.tz_convert(tz='UTC')
-print(df.sort_values("TradingDate").head(50))
+df = df.where(df["PointOfConnection"] == 'OHB2201').sort_values(["TradingDate", "TradingPeriod"]).dropna()
+df["NZDT"] = pd.to_datetime(df["TradingDate"] + 'T' + df["TradingPeriodStartTime"])
+df["NZDT"] = df["NZDT"].dt.tz_localize('Pacific/Auckland', ambiguous=False)
+df["UTCDT"] = df["NZDT"].dt.tz_convert('UTC')
+df.drop(["NZDT"], inplace=True, axis=1)
 
-# df["time_idx"] = ((df["TradingDate"].dt.dayofyear - 1) * 48) + (df["TradingPeriod"].astype(int))
+## TODO This needs to be fixed
+## we should set time_idx to be the number of intervals since the start of the dataset
+
+# Set the time_idx to be the trading period since the start of the dataset
+df["time_idx"] = (df["UTCDT"].dt.dayofyear * 48) - 48
+df["time_idx"] += df["TradingPeriod"].astype(int)
+df["time_idx"] -= df["time_idx"].min()
+
+# print(df)
+
+## Testing
+df = df.sort_values(["TradingDate", "TradingPeriod"]).dropna()
+df.drop_duplicates(subset=["PointOfConnection", "TradingDate", "TradingPeriod", "TradingPeriodStartTime"], keep="first", inplace=True)
+# df.drop(["Network", "Participant", "Island", "KilowattHours", "PointOfConnection", "FlowDirection"], inplace=True, axis=1)
+
+df.to_csv('data/ohb2201.csv', index=False)
+# print(df.head(400).to_string(index=False))
+
+exit()
+
+
 # print(df.sort_values("time_idx").where(df["TradingPeriod"] == 2).dropna())
 
 # print(df.sort_values("time_idx").head(50))
