@@ -1,0 +1,102 @@
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    # build: mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlflow:/mlflow
+    environment:
+      - BACKEND_STORE_URI=sqlite:///mlflow/mlflow.db
+      - ARTIFACT_STORE_URI=file:///mlflow/artifacts
+      - AWS_ACCESS_KEY_ID=foo
+      - AWS_SECRET_ACCESS_KEY=bar
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_USE_HTTPS=0
+      - S3_VERIFY_SSL=0
+    depends_on:
+      - minio
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./minio:/data
+    environment:
+      - MINIO_ACCESS_KEY=foo
+      - MINIO_SECRET_KEY=bar
+    command: server /data
+
+  mlflow-ui:
+    image: mlflow
+    ports:
+      - "80:80"
+    volumes:
+      - ./mlflow:/mlflow
+    environment:
+      - BACKEND_STORE_URI=sqlite:///mlflow/mlflow.db
+      - ARTIFACT_STORE_URI=file:///mlflow/artifacts
+      - AWS_ACCESS_KEY_ID=foo
+      - AWS_SECRET_ACCESS_KEY=bar
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_USE_HTTPS=0
+      - S3_VERIFY_SSL=0
+    depends_on:
+      - mlflow
+
+  mlflow-tracking:
+    image: mlflow
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./mlflow:/mlflow
+    environment:
+      - BACKEND_STORE_URI=sqlite:///mlflow/mlflow.db
+      - ARTIFACT_STORE_URI=file:///mlflow/artifacts
+      - AWS_ACCESS_KEY_ID=foo
+      - AWS_SECRET_ACCESS_KEY=bar
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_USE_HTTPS=0
+      - S3_VERIFY_SSL=0
+    depends_on:
+      - mlflow
+
+  mlflow-model-registry:
+    image: mlflow
+    ports:
+      - "5002:5002"
+    volumes:
+      - ./mlflow:/mlflow
+    environment:
+      - BACKEND_STORE_URI=sqlite:///mlflow/mlflow.db
+      - ARTIFACT_STORE_URI=file:///mlflow/artifacts
+      - AWS_ACCESS_KEY_ID=foo
+      - AWS_SECRET_ACCESS_KEY=bar
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_USE_HTTPS=0
+      - S3_VERIFY_SSL=0
+    depends_on:
+      - mlflow
+
+  mlflow-scheduler:
+    image: mlflow
+    ports:
+      - "5003:5003"
+    volumes:
+      - ./mlflow:/mlflow
+    environment:
+      - BACKEND_STORE_URI=sqlite:///mlflow/mlflow.db
+      - ARTIFACT_STORE_URI=file:///mlflow/artifacts
+      - AWS_ACCESS_KEY_ID=foo
+      - AWS_SECRET_ACCESS_KEY=bar
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_USE_HTTPS=0
+      - S3_VERIFY_SSL=0
+    depends_on:
+      - mlflow

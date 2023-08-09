@@ -1,0 +1,4 @@
+
+grid-export:
+  base_url: https://www.emi.ea.govt.nz/Wholesale/Datasets/Metered_data/Grid_export/
+  file_pattern: [1997-2023][01-12]_Grid_export.csv

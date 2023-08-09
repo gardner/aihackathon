@@ -1,0 +1,4 @@
+.env
+dload/data
+dload/*.txt
+forecast/data
