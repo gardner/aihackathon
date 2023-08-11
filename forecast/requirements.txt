@@ -1,1 +1,4 @@
 pytorch-forecasting
+pytorch-lightning
+lightning[extra]
+pytest

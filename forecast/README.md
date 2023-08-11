@@ -4,7 +4,7 @@
 
 ```shell
 mkdir -p data && cd data && \
-wget https://www.emi.ea.govt.nz/Wholesale/Datasets/Volumes/Reconciliation/2019/ReconciledInjectionAndOfftake_201908_20201023_102920.csv.gz && \
+wget https://www.emi.ea.govt.nz/Wholesale/Datasets/Volumes/Reconciliation/2016/ReconciledInjectionAndOfftake_201604_20170624_100756.csv.gz && \
 gzip -d *csv.gz
 ```
 

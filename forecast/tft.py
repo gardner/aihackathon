@@ -2,133 +2,184 @@
 
 # TemporalFusionTransformer
 
-# import torch
-# if torch.backends.mps.is_available():
-#     mps_device = torch.device("mps")
-#     x = torch.ones(1, device=mps_device)
-#     print(x)
-# else:
-#     print ("MPS device not found.")
-#     exit()
-
-# import lightning.pytorch as pl
-# from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
-# from lightning.pytorch.tuner import Tuner
-# from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
+import glob
+import json
+import multiprocessing
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
+from lightning.pytorch.tuner import Tuner
+import numpy as np
+from pytorch_forecasting import QuantileLoss, TimeSeriesDataSet, TemporalFusionTransformer
 import pandas as pd
-from datetime import datetime, timezone
-
-import pytz
-
-df = pd.read_csv('data/ReconciledInjectionAndOfftake_201604_20170624_100756.csv')
-
-# Ignore DST for now
-# dt = datetime.strptime('2015-01-03', '%Y/%m/%d')
-# print(dt)
-
-pytz_nz = pytz.timezone('Pacific/Auckland')
+from tqdm import tqdm
+from datetime import datetime, timedelta
+import os
+import math
 
 
-# df = df.where(df["TradingDate"] == '2016-04-03').sort_values("TradingPeriod").dropna()
-# 2023‐08‐08T19:05:07−07:00
-df = df.where(df["PointOfConnection"] == 'OHB2201').sort_values(["TradingDate", "TradingPeriod"]).dropna()
-df["NZDT"] = pd.to_datetime(df["TradingDate"] + 'T' + df["TradingPeriodStartTime"])
-df["NZDT"] = df["NZDT"].dt.tz_localize('Pacific/Auckland', ambiguous=False)
-df["UTCDT"] = df["NZDT"].dt.tz_convert('UTC')
-df.drop(["NZDT"], inplace=True, axis=1)
+import torch
+if torch.cuda.is_available():
+    print('YAY CUDA')
+    torch.set_float32_matmul_precision('high')
+else:
+    print ("MPS device not found.")
 
-## TODO This needs to be fixed
-## we should set time_idx to be the number of intervals since the start of the dataset
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
-# Set the time_idx to be the trading period since the start of the dataset
-df["time_idx"] = (df["UTCDT"].dt.dayofyear * 48) - 48
-df["time_idx"] += df["TradingPeriod"].astype(int)
-df["time_idx"] -= df["time_idx"].min()
+flow_direction = { 'Offtake':0, 'Injection':1 }
+island = { 'NI':0, 'SI':1 }
+point_of_connection = json.load(open('maps/point_of_connection.json'))
+network = json.load(open('maps/network.json'))
+participant = json.load(open('maps/participant.json'))
 
-# print(df)
-
-## Testing
-df = df.sort_values(["TradingDate", "TradingPeriod"]).dropna()
-df.drop_duplicates(subset=["PointOfConnection", "TradingDate", "TradingPeriod", "TradingPeriodStartTime"], keep="first", inplace=True)
-# df.drop(["Network", "Participant", "Island", "KilowattHours", "PointOfConnection", "FlowDirection"], inplace=True, axis=1)
-
-df.to_csv('data/ohb2201.csv', index=False)
-# print(df.head(400).to_string(index=False))
-
-exit()
+def half_hour_intervals(start, end):
+    delta = end - start
+    # Calculate the total number of seconds between the two datetimes
+    # and then divide by the number of seconds in half an hour (1800 seconds).
+    return int(delta.total_seconds() // 1800)
 
 
-# print(df.sort_values("time_idx").where(df["TradingPeriod"] == 2).dropna())
+def set_time_idx(df):
+    start_date = df["UTCDT"].min()
 
-# print(df.sort_values("time_idx").head(50))
-# # PointOfConnection Network Island Participant TradingDate  TradingPeriod TradingPeriodStartTime FlowDirection  KilowattHours
+    # we set time_idx to be the number of intervals since the start of the dataset
+    df["time_idx"] = df["UTCDT"].apply(lambda x: half_hour_intervals(start_date, x))
+    df.drop_duplicates(subset=["UTCDT", "PointOfConnection", "Network", "Participant", "FlowDirection", "KilowattHours"], keep="first", inplace=True)
+    df.dropna(inplace=True)
+    df.sort_values(["time_idx"], inplace=True)
+    return df
+
+def get_data(filename):
+    start_time = datetime.now()
+
+    df = pd.read_csv(filename, compression='gzip', index_col=None, header=0)
+    df['TradingPeriod'] = df['TradingPeriod'].astype(np.ushort)
+    df['KilowattHours'] = df['KilowattHours'].astype(np.uintc)
+    df["Island"] = df["Island"].map(island)
+    df["FlowDirection"] = df["FlowDirection"].map(flow_direction)
+    df["PointOfConnection"] = df["PointOfConnection"].map(point_of_connection)
+    df["Network"] = df["Network"].map(network)
+    df["Participant"] = df["Participant"].map(participant)
+
+    df["NZDT"] = pd.to_datetime(df["TradingDate"] + 'T' + df["TradingPeriodStartTime"])
+    df["NZDT"] = df["NZDT"].dt.tz_localize('Pacific/Auckland', ambiguous=False)
+    df["UTCDT"] = df["NZDT"].dt.tz_convert('UTC')
+
+    df.drop(["NZDT", "TradingDate", "TradingPeriodStartTime"], inplace=True, axis=1)
+
+    print('Time taken for', filename, ':', datetime.now() - start_time)
+
+    return df
+
+def main(df):
+    # # define dataset
+    max_encoder_length = 192
+    max_prediction_length = 48
+    training_cutoff = df["time_idx"].max() - max_prediction_length
+
+    training = TimeSeriesDataSet(
+        df[lambda x: x.time_idx <= training_cutoff],
+        time_idx="time_idx",
+        target="KilowattHours",
+        group_ids=[ "PointOfConnection" ],
+        min_encoder_length=0,
+        max_encoder_length=max_encoder_length,
+        min_prediction_length=1,
+        max_prediction_length=max_prediction_length,
+        static_categoricals=["Network", "Island", "Participant", "FlowDirection"],
+        time_varying_known_reals=["TradingPeriod"],
+        time_varying_unknown_reals=["KilowattHours"],
+        add_relative_time_idx=True,
+        add_target_scales=True,
+        add_encoder_length=True,
+        allow_missing_timesteps=True,
+    )
+
+    # create validation and training dataset
+    validation = TimeSeriesDataSet.from_dataset(training, df, min_prediction_idx=training.index.time.max() + 1, stop_randomization=True)
+
+    batch_size = max_encoder_length * 10
+    train_dataloader = training.to_dataloader(train=True, batch_size=batch_size, num_workers=4)
+    val_dataloader = validation.to_dataloader(train=False, batch_size=batch_size, num_workers=4)
+
+    # # define trainer with early stopping
+    early_stop_callback = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=1, verbose=False, mode="min")
+    lr_logger = LearningRateMonitor()
+    trainer = pl.Trainer(
+        max_epochs=100,
+        accelerator="auto",
+        gradient_clip_val=0.1,
+        log_every_n_steps=10,
+        limit_train_batches=30000,
+        callbacks=[lr_logger, early_stop_callback],
+    )
+
+    # # create the model
+    tft = TemporalFusionTransformer.from_dataset(
+        training,
+        learning_rate=0.03,
+        hidden_size=32,
+        attention_head_size=1,
+        dropout=0.1,
+        hidden_continuous_size=16,
+        output_size=7,
+        loss=QuantileLoss(),
+        log_interval=2,
+        reduce_on_plateau_patience=4
+    )
+    print(f"Number of parameters in network: {tft.size()/1e3:.1f}k")
+
+    # # find optimal learning rate (set limit_train_batches to 1.0 and log_interval = -1)
+    res = Tuner(trainer).lr_find(
+        tft, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader, early_stop_threshold=1000.0, max_lr=0.3,
+    )
+
+    print(f"suggested learning rate: {res.suggestion()}")
+    fig = res.plot(show=True, suggest=True)
+    fig.show()
+
+    # fit the model
+    trainer.fit(
+        tft, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader,
+    )
+
+    predictions = tft.predict(val_dataloader)
+    print(predictions.head())
+
+if __name__ == "__main__":
+    # Get all the .csv.gz files in the current directory.
+    all_files = glob.glob(os.path.join('data' , '201*', "*.csv.gz"), recursive=True)
+
+    # num_procs = math.ceil(multiprocessing.cpu_count() - 1)
+    num_procs = 6
+    print('Using', num_procs, 'of', multiprocessing.cpu_count())
+    # Create a Pool of workers to process the files in parallel.
+    pool = multiprocessing.Pool(num_procs)
+    lock = multiprocessing.Lock()
+    df = pd.DataFrame()
+
+    start_time = datetime.now()
+    # # Use tqdm to display a progress bar.
+    with tqdm(total=len(all_files)):
+        df = pd.concat(pool.map(get_data, all_files), axis=0, ignore_index=True)
+
+    # Join the process pool to wait for all processes to finish.
+    print("Waiting for all subprocesses to finish...")
+    pool.close()
+    pool.join()
+    print("All subprocesses done.")
+
+    # for filename in all_files:
+    #     print('Processing', filename)
+    #     df = pd.concat([df, get_data(filename)], axis=0, ignore_index=True)
+
+    print('Time taken for get_data():', datetime.now() - start_time)
 
 
 
-
-# # define dataset
-# max_encoder_length = 36
-# max_prediction_length = 6
-# training_cutoff = "2022-01-01"  # day for cutoff
-
-# training = TimeSeriesDataSet(
-#     data[lambda x: x.date < training_cutoff],
-#     time_idx= ...,
-#     target= ...,
-#     # weight="weight",
-#     group_ids=[ ... ],
-#     max_encoder_length=max_encoder_length,
-#     max_prediction_length=max_prediction_length,
-#     static_categoricals=[ ... ],
-#     static_reals=[ ... ],
-#     time_varying_known_categoricals=[ ... ],
-#     time_varying_known_reals=[ ... ],
-#     time_varying_unknown_categoricals=[ ... ],
-#     time_varying_unknown_reals=[ ... ],
-# )
-
-# # create validation and training dataset
-# validation = TimeSeriesDataSet.from_dataset(training, data, min_prediction_idx=training.index.time.max() + 1, stop_randomization=True)
-# batch_size = 128
-# train_dataloader = training.to_dataloader(train=True, batch_size=batch_size, num_workers=2)
-# val_dataloader = validation.to_dataloader(train=False, batch_size=batch_size, num_workers=2)
-
-# # define trainer with early stopping
-# early_stop_callback = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=1, verbose=False, mode="min")
-# lr_logger = LearningRateMonitor()
-# trainer = pl.Trainer(
-#     max_epochs=100,
-#     accelerator="auto",
-#     gradient_clip_val=0.1,
-#     limit_train_batches=30,
-#     callbacks=[lr_logger, early_stop_callback],
-# )
-
-# # create the model
-# tft = TemporalFusionTransformer.from_dataset(
-#     training,
-#     learning_rate=0.03,
-#     hidden_size=32,
-#     attention_head_size=1,
-#     dropout=0.1,
-#     hidden_continuous_size=16,
-#     output_size=7,
-#     loss=QuantileLoss(),
-#     log_interval=2,
-#     reduce_on_plateau_patience=4
-# )
-# print(f"Number of parameters in network: {tft.size()/1e3:.1f}k")
-
-# # find optimal learning rate (set limit_train_batches to 1.0 and log_interval = -1)
-# res = Tuner(trainer).lr_find(
-#     tft, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader, early_stop_threshold=1000.0, max_lr=0.3,
-# )
-
-# print(f"suggested learning rate: {res.suggestion()}")
-# fig = res.plot(show=True, suggest=True)
-# fig.show()
-
-# # fit the model
-# trainer.fit(
-#     tft, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader,
-# )
+    start_time = datetime.now()
+    df = set_time_idx(df)
+    df.to_csv('sorted.csv', index=False)
+    print(df.head(50))
+    main(df)
+    print('Time taken for write_csv():', datetime.now() - start_time)
