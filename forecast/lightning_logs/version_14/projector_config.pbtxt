@@ -1,0 +1,20 @@
+embeddings {
+  tensor_name: "Network:01116"
+  metadata_path: "01116/Network/metadata.tsv"
+  tensor_path: "01116/Network/tensors.tsv"
+}
+embeddings {
+  tensor_name: "Island:01116"
+  metadata_path: "01116/Island/metadata.tsv"
+  tensor_path: "01116/Island/tensors.tsv"
+}
+embeddings {
+  tensor_name: "Participant:01116"
+  metadata_path: "01116/Participant/metadata.tsv"
+  tensor_path: "01116/Participant/tensors.tsv"
+}
+embeddings {
+  tensor_name: "FlowDirection:01116"
+  metadata_path: "01116/FlowDirection/metadata.tsv"
+  tensor_path: "01116/FlowDirection/tensors.tsv"
+}

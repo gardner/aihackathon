@@ -1,16 +1,14 @@
 name: hack
+channels:
+  - conda-forge
+  - defaults
 dependencies:
   - python=3.10
-  - pytorch=2.0.1
+  - pytorch==2.0.1
   - pytorch-lightning==2.0.6
+  - tensorboardx
   - pytest
   - pandas
   - pyarrow
-channels:
-  - conda-forge
 variables:
   PYTORCH_ENABLE_MPS_FALLBACK: 1
-# conda env create -f environment.yml
-
-# python3 -m pip install pytorch-forecasting==1.0.0
-# python3 -m pip install "lightning[extra]"
