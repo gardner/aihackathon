@@ -1,4 +1,4 @@
 pytorch-forecasting
-pytorch-lightning
-lightning[extra]
+lightning
+tensorboardx
 pytest

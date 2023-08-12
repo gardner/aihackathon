@@ -4,4 +4,4 @@ dload/*.txt
 forecast/data
 .DS_Store
 forecast/recon.csv
-
+.lr_find*

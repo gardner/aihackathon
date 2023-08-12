@@ -19,8 +19,8 @@ import math
 
 import torch
 if torch.cuda.is_available():
-    print('YAY CUDA')
     torch.set_float32_matmul_precision('high')
+    print('YAY CUDA')
 else:
     print ("MPS device not found.")
 
@@ -38,6 +38,44 @@ def half_hour_intervals(start, end):
     # and then divide by the number of seconds in half an hour (1800 seconds).
     return int(delta.total_seconds() // 1800)
 
+def reduce_mem_usage(df):
+    """ iterate through all the columns of a dataframe and modify the data type
+        to reduce memory usage.
+    """
+    # start_mem = df.memory_usage().sum() / 1024**2
+    # print('Memory usage of dataframe is {:.2f} MB'.format(start_mem))
+
+    for col in df.columns:
+        col_type = df[col].dtype
+        # print(str(col_type))
+
+        if col_type != object:
+            c_min = df[col].min()
+            c_max = df[col].max()
+            if str(col_type)[:3] == 'int' or str(col_type)[:4] == 'uint':
+                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
+                    df[col] = df[col].astype(np.int8)
+                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
+                    df[col] = df[col].astype(np.int16)
+                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
+                    df[col] = df[col].astype(np.int32)
+                elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
+                    df[col] = df[col].astype(np.int64)
+            elif not 'datetime' in str(col_type):
+                if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
+                    df[col] = df[col].astype(np.float16)
+                elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
+                    df[col] = df[col].astype(np.float32)
+                else:
+                    df[col] = df[col].astype(np.float64)
+        else:
+            df[col] = df[col].astype('category')
+
+    end_mem = df.memory_usage().sum() / 1024**2
+    # print('Memory usage after optimization is: {:.2f} MB'.format(end_mem))
+    # print('Decreased by {:.1f}%'.format(100 * (start_mem - end_mem) / start_mem))
+
+    return df
 
 def set_time_idx(df):
     start_date = df["UTCDT"].min()
@@ -148,10 +186,10 @@ def main(df):
 
 if __name__ == "__main__":
     # Get all the .csv.gz files in the current directory.
-    all_files = glob.glob(os.path.join('data' , '201*', "*.csv.gz"), recursive=True)
+    all_files = glob.glob(os.path.join('data' , '**', "*.csv.gz"), recursive=True)
 
     # num_procs = math.ceil(multiprocessing.cpu_count() - 1)
-    num_procs = 6
+    num_procs = 2
     print('Using', num_procs, 'of', multiprocessing.cpu_count())
     # Create a Pool of workers to process the files in parallel.
     pool = multiprocessing.Pool(num_procs)
@@ -159,27 +197,23 @@ if __name__ == "__main__":
     df = pd.DataFrame()
 
     start_time = datetime.now()
-    # # Use tqdm to display a progress bar.
-    with tqdm(total=len(all_files)):
-        df = pd.concat(pool.map(get_data, all_files), axis=0, ignore_index=True)
+    # Use tqdm to display a progress bar.
+    # with tqdm(total=len(all_files)):
+    #     df = pd.concat(pool.map(get_data, all_files), axis=0, ignore_index=True)
 
-    # Join the process pool to wait for all processes to finish.
-    print("Waiting for all subprocesses to finish...")
-    pool.close()
-    pool.join()
-    print("All subprocesses done.")
+    # # Join the process pool to wait for all processes to finish.
+    # print("Waiting for all subprocesses to finish...")
+    # pool.close()
+    # pool.join()
+    # print("All subprocesses done.")
 
-    # for filename in all_files:
-    #     print('Processing', filename)
-    #     df = pd.concat([df, get_data(filename)], axis=0, ignore_index=True)
+    for filename in all_files:
+        print('Processing', filename)
+        df = pd.concat([df, get_data(filename)], axis=0, ignore_index=True)
 
     print('Time taken for get_data():', datetime.now() - start_time)
 
-
-
-    start_time = datetime.now()
     df = set_time_idx(df)
-    df.to_csv('sorted.csv', index=False)
+    print('Time taken for set_time_idx():', datetime.now() - start_time)
     print(df.head(50))
     main(df)
-    print('Time taken for write_csv():', datetime.now() - start_time)
